@@ -1,0 +1,9 @@
+{
+  "name": "airhaifa-summer-2027-checker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright checker for Air Haifa round trips from Haifa to Larnaca and Paphos",
+  "type": "module",
+  "scripts": { "search": "node scripts/search-airhaifa.mjs" },
+  "dependencies": { "playwright": "^1.56.1" }
+}
