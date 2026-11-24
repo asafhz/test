@@ -1,4 +1,5 @@
 name: Air Haifa Summer 2027 Fare Search
+# Re-run after fixing the booking date picker automation.
 
 on:
   push:
