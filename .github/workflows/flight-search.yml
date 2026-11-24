@@ -1,0 +1,54 @@
+name: Air Haifa Summer 2027 Fare Search
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'package.json'
+      - 'scripts/**'
+      - '.github/workflows/flight-search.yml'
+      - 'README.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: airhaifa-summer-2027-search
+  cancel-in-progress: false
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ADULTS: '1'
+      CHILDREN: '0'
+      HEADLESS: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Search Air Haifa fares
+        run: npm run search
+
+      - name: Upload search report and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: airhaifa-summer-2027-results
+          path: results/
+          if-no-files-found: warn
+          retention-days: 30
