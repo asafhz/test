@@ -45,69 +45,48 @@ async function chooseRoute(page, label, code) {
 }
 
 async function selectDate(page, which, iso) {
-  const label = which === 'departure' ? /תאריך יציאה|departure date/i : /תאריך חזרה|return date/i;
-  const selectors = which === 'departure'
-    ? ['input[aria-label*="departure" i]', 'input[aria-label*="יציאה"]', 'input[placeholder*="יציאה"]', 'input[name*="departure" i]', '[data-testid*="departure-date"]']
-    : ['input[aria-label*="return" i]', 'input[aria-label*="חזרה"]', 'input[placeholder*="חזרה"]', 'input[name*="return" i]', '[data-testid*="return-date"]'];
-  let field = null;
-  for (const selector of selectors) {
-    const candidate = page.locator(selector).first();
-    if (await candidate.count() && await candidate.isVisible().catch(() => false)) {
-      field = candidate;
-      break;
+  const index = which === 'departure' ? 0 : 1;
+  const fields = page.locator('input[placeholder="DD/MM/YYYY"]');
+  const field = fields.nth(index);
+  if (!(await field.count())) return 'date_input_missing';
+  try {
+    await field.click({ timeout: 2500 });
+    await wait(250);
+    const [year, month, day] = iso.split('-').map(Number);
+    const targetValue = dmy(iso);
+    const readonly = await field.getAttribute('readonly');
+    if (readonly === null) {
+      try {
+        await field.fill(targetValue, { timeout: 1500 });
+        await field.press('Tab').catch(() => {});
+        await wait(250);
+        if ((await field.inputValue()).trim() === targetValue) return 'input';
+      } catch {}
     }
-  }
-  if (!field) {
-    const labelled = page.getByLabel(label).first();
-    if (await labelled.count() && await labelled.isVisible().catch(() => false)) field = labelled;
-  }
-  if (field) {
-    try {
-      const tag = await field.evaluate(el => el.tagName.toLowerCase());
-      const type = await field.getAttribute('type');
-      const readonly = await field.getAttribute('readonly');
-      if (tag === 'input' && readonly === null) {
-        for (const value of (type === 'date' ? [iso] : [dmy(iso), iso])) {
-          try {
-            await field.fill(value, { timeout: 1800 });
-            if (await field.inputValue() === value) return 'input';
-          } catch {}
-        }
-      }
-      await clickFirst(field);
-    } catch {}
-  } else {
-    if (!(await clickFirst(page.getByText(label)))) return 'field_missing';
-  }
-  await wait(300);
-  const [year, month, day] = iso.split('-');
-  for (const selector of ['[data-date="' + iso + '"]', '[aria-label*="' + iso + '"]', '[title*="' + iso + '"]']) {
-    if (await clickFirst(page.locator(selector))) return 'calendar';
-  }
-  const monthNames = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
-  const target = new RegExp('(?:' + Number(day) + '\\s*(?:ב)?' + monthNames[Number(month) - 1] +
-    '\\s*' + year + '|' + ['January','February','March','April','May','June','July','August','September','October','November','December'][Number(month)-1] +
-    '\\s*' + Number(day) + ',?\\s*' + year + ')', 'i');
-  for (let monthStep = 0; monthStep < 14; monthStep++) {
-    const cells = page.locator('button,[role="gridcell"],[role="option"]');
-    const count = Math.min(await cells.count(), 350);
-    for (let i = 0; i < count; i++) {
-      const cell = cells.nth(i);
-      if (!(await cell.isVisible().catch(() => false)) || await cell.isDisabled().catch(() => false)) continue;
-      const text = await cell.innerText().catch(() => '');
-      const aria = await cell.getAttribute('aria-label').catch(() => '');
-      if (target.test(text + ' ' + aria) && await clickFirst(cell)) return 'calendar';
+    // Air Haifa's date picker opens two months at a time. Move the left
+    // calendar pane back to the requested month before selecting its day.
+    const prev = page.locator('button[aria-label*="previous month" i], button[aria-label*="חודש קודם"], button[title*="previous month" i]').first();
+    if (!(await prev.count())) return 'previous_month_button_missing';
+    // The observed picker opens at October 2027; July/August are 3/2 clicks back.
+    const steps = month === 7 ? 3 : month === 8 ? 2 : 0;
+    for (let i = 0; i < steps; i++) {
+      await prev.click({ timeout: 1500 });
+      await wait(180);
     }
-    let moved = false;
-    for (const selector of ['button[aria-label*="next" i]', 'button[title*="next" i]', 'button[aria-label*="הבא"]', '[data-action="next"]']) {
-      if (await clickFirst(page.locator(selector), 1200)) { moved = true; break; }
+    // In the two-month picker, the first exact day button belongs to the
+    // left (target) month after the month navigation above.
+    const dayButton = page.locator('button').filter({ hasText: new RegExp('^\\s*' + day + '\\s*$') }).first();
+    if (await dayButton.count() && await dayButton.isVisible().catch(() => false)) {
+      await dayButton.click({ timeout: 2500 });
+      await wait(200);
+      const value = await field.inputValue().catch(() => '');
+      if (value === targetValue || value === iso) return 'calendar';
     }
-    if (!moved) break;
-    await wait(150);
+    return 'calendar_day_not_selected';
+  } catch (error) {
+    return 'calendar_error: ' + String(error?.message || error).slice(0, 160);
   }
-  return 'calendar_date_missing';
 }
-
 async function diagnostics(page) {
   return page.evaluate(() => ({
     url: location.href, title: document.title,
