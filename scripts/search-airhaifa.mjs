@@ -257,7 +257,7 @@ async function main() {
         console.log(destination.code + ': ' + outbound + ' -> ' + returning);
         const row = await searchOne(browser, destination, outbound, returning);
         results.push(row);
-        console.log(row.status + ': ' + JSON.stringify(row.prices));
+        console.log(row.status + ': ' + JSON.stringify({ outbound: row.selected_outbound, returning: row.selected_return, total: row.total_price, total_text: row.total_text }));
         await wait(1500);
       }
     }
@@ -275,18 +275,19 @@ async function main() {
     generated_at: new Date().toISOString(), origin: 'HFA',
     destinations: ['LCA', 'PFO'], passengers: '1 adult',
     baggage_included: false, coupon_applied: false, date_pairs: DATES,
-    cheapest_visible_candidate: candidates[0] || null,
-    warning: 'A visible price may be a one-way or starting fare, not the full round-trip total. Verify both legs, baggage, seats and taxes on Air Haifa. No booking or payment is performed.',
+    cheapest_verified_offer: candidates[0] || null,
+    warning: 'An offer is included only when both flight legs are selected and the displayed cart total matches the sum of the two leg prices. Baggage, seats and optional extras are not included. No booking or payment is performed.',
     results
   };
   await fs.writeFile(OUT + '/results.json', JSON.stringify(report, null, 2));
-  const csvRows = ['destination,outbound,return,status,currency,amount,page'];
+  const csvRows = ['destination,outbound,return,status,outbound_flight,outbound_time,outbound_price,return_flight,return_time,return_price,total_price,currency,booking_url'];
   for (const row of results) {
-    const prices = row.prices.length ? row.prices : [{ currency: '', amount: '' }];
-    for (const price of prices) {
-      csvRows.push([row.destination, row.outbound, row.return, row.status, price.currency, price.amount, row.page]
-        .map(value => '"' + String(value ?? '').replaceAll('"', '""') + '"').join(','));
-    }
+    csvRows.push([
+      row.destination, row.outbound, row.return, row.status,
+      row.selected_outbound?.flight_number, row.selected_outbound?.departure_time, row.outbound_price,
+      row.selected_return?.flight_number, row.selected_return?.departure_time, row.return_price,
+      row.total_price, row.currency, row.booking_url
+    ].map(value => '"' + String(value ?? '').replaceAll('"', '""') + '"').join(','));
   }
   await fs.writeFile(OUT + '/results.csv', csvRows.join('\n'));
   const counts = Object.fromEntries([...new Set(results.map(row => row.status))]
@@ -296,13 +297,16 @@ async function main() {
     'Generated: ' + report.generated_at,
     'Passengers: 1 adult. No baggage or coupon included.', '',
     'Searches attempted: ' + results.length,
+    'Verified round-trip offers: ' + candidates.length,
     'Statuses: ' + JSON.stringify(counts),
-    candidates[0] ? 'Lowest visible candidate: ' + candidates[0].shown + ' – ' + candidates[0].destination + ', ' + candidates[0].outbound + ' to ' + candidates[0].return : 'No visible price candidate extracted.',
+    candidates[0] ? 'Lowest verified round-trip total: ' + candidates[0].currency + ' ' + candidates[0].amount + ' – ' + candidates[0].destination + ', ' + candidates[0].outbound + ' to ' + candidates[0].return : 'No verified round-trip offer extracted.',
     '', report.warning, '',
-    '| Destination | Dates | Status | Visible prices |',
-    '|---|---|---|---|',
+    '| Destination | Dates | Status | Outbound | Return | Total |',
+    '|---|---|---|---|---|---|',
     ...results.map(row => '| ' + row.destination + ' | ' + row.outbound + ' → ' + row.return + ' | ' +
-      row.status + ' | ' + (row.prices.map(price => price.shown).join(', ') || '—') + ' |')
+      row.status + ' | ' + (row.selected_outbound ? row.selected_outbound.departure_time + ' / ' + row.outbound_price : '—') +
+      ' | ' + (row.selected_return ? row.selected_return.departure_time + ' / ' + row.return_price : '—') +
+      ' | ' + (row.total_price != null ? row.currency + ' ' + row.total_price : '—') + ' |')
   ];
   const markdown = lines.join('\n');
   await fs.writeFile(OUT + '/summary.md', markdown);
