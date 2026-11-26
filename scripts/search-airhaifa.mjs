@@ -50,12 +50,33 @@ async function selectTripDates(page, outbound, returning) {
 
   // The live Air Haifa widget uses dedicated trigger buttons and a two-month
   // calendar. Do not assume its initial month or a fixed number of clicks.
-  const departureTrigger = page.locator('button.date-input-17-trigger');
-  if (!(await departureTrigger.count())) return { ok: false, reason: 'departure_date_trigger_missing' };
-  await departureTrigger.click({ timeout: 7000 });
+  // Air Haifa changed the booking widget markup: the old date-input-17/18
+  // classes are no longer guaranteed. Prefer stable accessible labels and
+  // retain the legacy selectors as fallbacks.
+  const departureTrigger = page.locator(
+    'button.date-input-17-trigger, button[aria-label*="בחירת תאריך יציאה"], button[aria-label*="Departure date"]'
+  ).first();
+  if (!(await departureTrigger.count())) {
+    const fallback = page.getByRole('button', { name: /בחירת תאריך יציאה|Departure date/i }).first();
+    if (!(await fallback.count())) return { ok: false, reason: 'departure_date_trigger_missing', diagnostics: await diagnostics(page) };
+    await fallback.click({ timeout: 7000 });
+  } else {
+    await departureTrigger.click({ timeout: 7000 });
+  }
 
-  const dialog = page.locator('[data-testid="date-container"]');
-  await dialog.waitFor({ state: 'visible', timeout: 10000 });
+  // Calendar container selectors have also varied between widget releases.
+  let dialog = page.locator('[data-testid="date-container"]').first();
+  try {
+    await dialog.waitFor({ state: 'visible', timeout: 5000 });
+  } catch {
+    dialog = page.locator('[role="dialog"]:visible').first();
+    if (!(await dialog.count())) dialog = page.locator('body');
+    await page.waitForFunction(() =>
+      !!document.querySelector('h2[id^="month-"]') ||
+      !!document.querySelector('button[data-att^="day-"]'),
+      { timeout: 10000 }
+    );
+  }
 
   async function ensureMonthVisible(iso) {
     const targetMonth = iso.slice(0, 7);
@@ -113,8 +134,8 @@ async function selectTripDates(page, outbound, returning) {
       return node ? ((node.value || node.innerText || '').trim()) : '';
     };
     return {
-      departureTrigger: read('button.date-input-17-trigger'),
-      returnTrigger: read('button.date-input-18-trigger'),
+      departureTrigger: read('button.date-input-17-trigger, button[aria-label*="בחירת תאריך יציאה"], button[aria-label*="Departure date"]'),
+      returnTrigger: read('button.date-input-18-trigger, button[aria-label*="בחירת תאריך חזרה"], button[aria-label*="Return date"]'),
       inputs: [...document.querySelectorAll('input[placeholder="DD/MM/YYYY"]')].map(node => node.value)
     };
   });
