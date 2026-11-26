@@ -101,19 +101,52 @@ async function diagnostics(page) {
   }));
 }
 
-function extractPrices(text) {
-  const matches = [...text.matchAll(/(€|EUR|₪|\$)\s?([0-9]{1,4}(?:[.,][0-9]{1,2})?)/g)];
-  const prices = matches.map(m => ({
-    currency: m[1], amount: Number(m[2].replace(',', '.')), shown: m[0]
-  })).filter(p => p.amount > 0 && p.amount < 10000);
-  return [...new Map(prices.map(p => [p.currency + p.amount, p])).values()];
+function parsePrice(value) {
+  if (value == null) return null;
+  const raw = String(value).trim().replace(/[^\d.,]/g, '');
+  if (!raw) return null;
+  const normalized = raw.includes('.') ? raw.replace(/,/g, '') : raw.replace(',', '.');
+  const amount = Number(normalized);
+  return Number.isFinite(amount) && amount > 0 && amount < 10000 ? amount : null;
+}
+
+async function readFlightOptions(page) {
+  return page.evaluate(() => {
+    const buttons = [...document.querySelectorAll('.flightChoice_select')];
+    return buttons.map((button, index) => {
+      let card = button;
+      for (let depth = 0; depth < 10 && card; depth++, card = card.parentElement) {
+        const title = card.querySelector('.flightItem_title');
+        const priceNode = card.querySelector('[data-flightsprice]') ||
+          (card.hasAttribute('data-flightsprice') ? card : null);
+        if (title && priceNode) break;
+      }
+      if (!card) return null;
+      const title = card.querySelector('.flightItem_title');
+      const titleText = (title?.innerText || '').trim();
+      const cardText = (card.innerText || '').trim();
+      const priceNode = card.querySelector('[data-flightsprice]') ||
+        (card.hasAttribute('data-flightsprice') ? card : null);
+      const rawPrice = priceNode?.getAttribute('data-flightsprice') || priceNode?.innerText || '';
+      const numericPrice = Number(String(rawPrice).replace(/[^\d.,]/g, '').replace(',', '.'));
+      const times = titleText.match(/\b(?:[01]?\d|2[0-3]):[0-5]\d\b/g) || [];
+      const flightNumber = titleText.match(/\b[A-Z]\d{3,5}\b/)?.[0] || null;
+      return {
+        index, flight_number: flightNumber,
+        departure_time: times[0] || null, arrival_time: times[1] || null,
+        price: Number.isFinite(numericPrice) && numericPrice > 0 ? numericPrice : null,
+        title: titleText, text: cardText.slice(0, 1000)
+      };
+    }).filter(Boolean);
+  });
 }
 
 async function searchOne(browser, destination, outbound, returning) {
   const page = await browser.newPage({ locale: 'he-IL', timezoneId: 'Asia/Jerusalem' });
   const result = {
     destination: destination.code, origin: 'HFA', outbound, return: returning,
-    passengers: '1 adult', status: 'started', prices: [], page: destination.url
+    passengers: '1 adult', status: 'started', outbound_options: [], return_options: [],
+    page: destination.url
   };
   try {
     await page.goto(destination.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
@@ -125,31 +158,85 @@ async function searchOne(browser, destination, outbound, returning) {
     result.destination_selected = await chooseRoute(page, /לאן|יעד|to/i, destination.code);
     result.outbound_selection = await selectDate(page, 'departure', outbound);
     result.return_selection = await selectDate(page, 'return', returning);
-    if (['field_missing', 'calendar_date_missing'].includes(result.outbound_selection) ||
-        ['field_missing', 'calendar_date_missing'].includes(result.return_selection)) {
-      result.status = 'date_selection_failed';
+
+    const dateValues = await page.locator('input[placeholder="DD/MM/YYYY"]').evaluateAll(nodes => nodes.map(n => n.value));
+    result.selected_date_values = dateValues;
+    if (dateValues[0] !== dmy(outbound) || dateValues[1] !== dmy(returning)) {
+      result.status = 'date_selection_not_verified';
       result.diagnostics = await diagnostics(page);
-      await page.screenshot({ path: OUT + '/' + destination.code + '-' + outbound + '-date-failed.png', fullPage: true }).catch(() => {});
       return result;
     }
+
     const searchButton = page.getByRole('button', { name: /חיפוש טיסה|Search flights|Search/i });
     if (!(await clickFirst(searchButton, 7000))) {
       result.status = 'search_button_missing';
       result.diagnostics = await diagnostics(page);
       return result;
     }
-    await page.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(() => {});
-    await wait(8000);
-    const body = await page.locator('body').innerText().catch(() => '');
+    await page.waitForURL(/\/flight-results\/HFA-(LCA|PFO)\//, { timeout: 30000 }).catch(() => {});
+    await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => {});
+    await wait(5000);
     result.page = page.url();
-    result.prices = extractPrices(body);
-    result.excerpt = body.slice(0, 7000);
-    result.status = /captcha|verify you are human|robot check|אני לא רובוט/i.test(body) ? 'captcha' :
-      /לא נמצאו טיסות|אין טיסות|no flights|no results/i.test(body) ? 'no_flights_or_dates' :
-      result.prices.length ? 'price_candidates_found' : 'results_price_not_parsed';
-    if (result.status !== 'price_candidates_found') {
-      await page.screenshot({ path: OUT + '/' + destination.code + '-' + outbound + '-result.png', fullPage: true }).catch(() => {});
+
+    const expectedPath = '/flight-results/HFA-' + destination.code + '/' + outbound + '/' + returning + '/1/';
+    if (!result.page.includes(expectedPath)) {
+      result.status = 'search_url_date_mismatch';
+      result.diagnostics = await diagnostics(page);
+      return result;
     }
+
+    result.outbound_options = await readFlightOptions(page);
+    const outboundChoices = result.outbound_options.filter(x => x.price && x.departure_time && x.arrival_time);
+    if (!outboundChoices.length) {
+      result.status = 'outbound_flights_not_parsed';
+      result.diagnostics = await diagnostics(page);
+      return result;
+    }
+    const cheapestOutbound = [...outboundChoices].sort((a, b) => a.price - b.price)[0];
+    result.selected_outbound = cheapestOutbound;
+    await page.locator('.flightChoice_select').nth(cheapestOutbound.index).click({ timeout: 7000 });
+    await wait(3500);
+
+    await page.waitForFunction(() =>
+      !!document.querySelector('.inboundResultsGalleryContainer .resultsGallery_item.selected') &&
+      document.querySelectorAll('.flightChoice_select').length > 0,
+      { timeout: 20000 }
+    ).catch(() => {});
+    await wait(1500);
+
+    result.return_options = await readFlightOptions(page);
+    const returnChoices = result.return_options.filter(x => x.price && x.departure_time && x.arrival_time);
+    if (!returnChoices.length) {
+      result.status = 'return_flights_not_parsed';
+      result.diagnostics = await diagnostics(page);
+      return result;
+    }
+    const cheapestReturn = [...returnChoices].sort((a, b) => a.price - b.price)[0];
+    result.selected_return = cheapestReturn;
+    await page.locator('.flightChoice_select').nth(cheapestReturn.index).click({ timeout: 7000 });
+    await wait(2500);
+
+    result.total_text = await page.locator('.totalPrice').first().innerText().catch(() => '');
+    result.outbound_price = cheapestOutbound.price;
+    result.return_price = cheapestReturn.price;
+    result.currency = 'EUR';
+    result.computed_total = Math.round((cheapestOutbound.price + cheapestReturn.price) * 100) / 100;
+    result.total_price = parsePrice(result.total_text);
+    result.booking_url = page.url();
+
+    const totalMatchesLegs = result.total_price !== null &&
+      Math.abs(result.total_price - result.computed_total) < 0.02;
+    if (!cheapestOutbound.flight_number || !cheapestReturn.flight_number ||
+        !totalMatchesLegs || !/^https:\/\//i.test(result.booking_url)) {
+      result.status = 'total_or_itinerary_not_verified';
+      await page.screenshot({ path: OUT + '/' + destination.code + '-' + outbound + '-total-not-verified.png', fullPage: true }).catch(() => {});
+      return result;
+    }
+    result.outbound_departure_time = cheapestOutbound.departure_time;
+    result.return_departure_time = cheapestReturn.departure_time;
+    result.outbound_arrival_time = cheapestOutbound.arrival_time;
+    result.return_arrival_time = cheapestReturn.arrival_time;
+    result.status = 'verified_offer';
   } catch (error) {
     result.status = 'error';
     result.error = String(error?.message || error).slice(0, 700);
@@ -160,7 +247,6 @@ async function searchOne(browser, destination, outbound, returning) {
   }
   return result;
 }
-
 async function main() {
   await fs.mkdir(OUT, { recursive: true });
   const browser = await chromium.launch({ headless: true, args: ['--no-sandbox'] });
@@ -178,9 +264,13 @@ async function main() {
   } finally {
     await browser.close();
   }
-  const candidates = results.flatMap(row => row.prices.map(price => ({
-    ...price, destination: row.destination, outbound: row.outbound, return: row.return
-  }))).sort((a, b) => a.amount - b.amount);
+  const candidates = results.filter(row => row.status === 'verified_offer').map(row => ({
+    destination: row.destination, outbound: row.outbound, return: row.return,
+    amount: row.total_price, currency: row.currency,
+    outbound_departure_time: row.outbound_departure_time,
+    return_departure_time: row.return_departure_time,
+    booking_url: row.booking_url
+  })).sort((a, b) => a.amount - b.amount);
   const report = {
     generated_at: new Date().toISOString(), origin: 'HFA',
     destinations: ['LCA', 'PFO'], passengers: '1 adult',
