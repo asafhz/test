@@ -44,48 +44,88 @@ async function chooseRoute(page, label, code) {
     await clickFirst(page.getByRole('option', { name: option }));
 }
 
-async function selectDate(page, which, iso) {
-  const index = which === 'departure' ? 0 : 1;
-  const fields = page.locator('input[placeholder="DD/MM/YYYY"]');
-  const field = fields.nth(index);
-  if (!(await field.count())) return 'date_input_missing';
-  try {
-    await field.click({ timeout: 2500 });
-    await wait(250);
-    const [year, month, day] = iso.split('-').map(Number);
-    const targetValue = dmy(iso);
-    const readonly = await field.getAttribute('readonly');
-    if (readonly === null) {
-      try {
-        await field.fill(targetValue, { timeout: 1500 });
-        await field.press('Tab').catch(() => {});
-        await wait(250);
-        if ((await field.inputValue()).trim() === targetValue) return 'input';
-      } catch {}
+async function selectTripDates(page, outbound, returning) {
+  const expectedOutbound = dmy(outbound);
+  const expectedReturn = dmy(returning);
+
+  // The live Air Haifa widget uses dedicated trigger buttons and a two-month
+  // calendar. Do not assume its initial month or a fixed number of clicks.
+  const departureTrigger = page.locator('button.date-input-17-trigger');
+  if (!(await departureTrigger.count())) return { ok: false, reason: 'departure_date_trigger_missing' };
+  await departureTrigger.click({ timeout: 7000 });
+
+  const dialog = page.locator('[data-testid="date-container"]');
+  await dialog.waitFor({ state: 'visible', timeout: 10000 });
+
+  async function ensureMonthVisible(iso) {
+    const targetMonth = iso.slice(0, 7);
+    for (let attempt = 0; attempt < 24; attempt++) {
+      const headings = await dialog.locator('h2[id^="month-"]').evaluateAll(nodes =>
+        nodes.map(node => ({ id: node.id, text: (node.innerText || '').trim() }))
+      );
+      if (headings.some(item => item.id === 'month-' + targetMonth)) return headings;
+
+      const visibleMonths = headings.map(item => item.id.replace('month-', '')).filter(Boolean).sort();
+      if (visibleMonths.length && targetMonth < visibleMonths[0]) {
+        const prev = dialog.locator('button[data-att="prev-month"]');
+        if (!(await prev.count()) || await prev.isDisabled()) {
+          throw new Error('target_month_before_calendar_range:' + targetMonth);
+        }
+        await prev.click({ timeout: 3000 });
+      } else {
+        const next = dialog.locator('button[data-att="next-month"]');
+        if (!(await next.count()) || await next.isDisabled()) {
+          throw new Error('next_month_button_unavailable:' + targetMonth);
+        }
+        await next.click({ timeout: 3000 });
+      }
+      await wait(120);
     }
-    // Air Haifa's date picker opens two months at a time. Move the left
-    // calendar pane back to the requested month before selecting its day.
-    const prev = page.locator('button[aria-label*="previous month" i], button[aria-label*="חודש קודם"], button[title*="previous month" i]').first();
-    if (!(await prev.count())) return 'previous_month_button_missing';
-    // The observed picker opens at October 2027; July/August are 3/2 clicks back.
-    const steps = month === 7 ? 3 : month === 8 ? 2 : 0;
-    for (let i = 0; i < steps; i++) {
-      await prev.click({ timeout: 1500 });
-      await wait(180);
-    }
-    // In the two-month picker, the first exact day button belongs to the
-    // left (target) month after the month navigation above.
-    const dayButton = page.locator('button').filter({ hasText: new RegExp('^\\s*' + day + '\\s*$') }).first();
-    if (await dayButton.count() && await dayButton.isVisible().catch(() => false)) {
-      await dayButton.click({ timeout: 2500 });
-      await wait(200);
-      const value = await field.inputValue().catch(() => '');
-      if (value === targetValue || value === iso) return 'calendar';
-    }
-    return 'calendar_day_not_selected';
-  } catch (error) {
-    return 'calendar_error: ' + String(error?.message || error).slice(0, 160);
+    throw new Error('target_month_not_reached:' + targetMonth);
   }
+
+  async function chooseDay(iso, rangeLabel) {
+    await ensureMonthVisible(iso);
+    const day = dialog.locator('button[data-att="day-' + iso + '"]');
+    await day.waitFor({ state: 'visible', timeout: 7000 });
+    if (await day.isDisabled()) throw new Error('date_disabled:' + iso);
+    await day.click({ timeout: 5000 });
+    await wait(300);
+    const label = await day.getAttribute('aria-label').catch(() => '');
+    if (rangeLabel && label && !label.includes(rangeLabel)) {
+      // aria-label can update asynchronously after the range selection.
+      await wait(250);
+    }
+  }
+
+  await chooseDay(outbound, 'Start of Range');
+  await chooseDay(returning, 'End of Range');
+
+  const done = dialog.locator('button[data-att="done"]');
+  if (await done.count() && await done.isVisible().catch(() => false)) {
+    await done.click({ timeout: 3000 });
+  }
+  await wait(300);
+
+  const state = await page.evaluate(() => {
+    const read = selector => {
+      const node = document.querySelector(selector);
+      return node ? ((node.value || node.innerText || '').trim()) : '';
+    };
+    return {
+      departureTrigger: read('button.date-input-17-trigger'),
+      returnTrigger: read('button.date-input-18-trigger'),
+      inputs: [...document.querySelectorAll('input[placeholder="DD/MM/YYYY"]')].map(node => node.value)
+    };
+  });
+
+  const outboundVerified = state.inputs.includes(expectedOutbound) || state.departureTrigger.includes(expectedOutbound);
+  const returnVerified = state.inputs.includes(expectedReturn) || state.returnTrigger.includes(expectedReturn);
+  return {
+    ok: outboundVerified && returnVerified,
+    expected: [expectedOutbound, expectedReturn],
+    state
+  };
 }
 async function diagnostics(page) {
   return page.evaluate(() => ({
@@ -156,14 +196,15 @@ async function searchOne(browser, destination, outbound, returning) {
     }
     result.origin_selected = await chooseRoute(page, /מאיפה|מוצא|from/i, 'HFA');
     result.destination_selected = await chooseRoute(page, /לאן|יעד|to/i, destination.code);
-    result.outbound_selection = await selectDate(page, 'departure', outbound);
-    result.return_selection = await selectDate(page, 'return', returning);
-
-    const dateValues = await page.locator('input[placeholder="DD/MM/YYYY"]').evaluateAll(nodes => nodes.map(n => n.value));
-    result.selected_date_values = dateValues;
-    if (dateValues[0] !== dmy(outbound) || dateValues[1] !== dmy(returning)) {
+    result.date_selection = await selectTripDates(page, outbound, returning);
+    result.selected_date_values = result.date_selection.state;
+    if (!result.date_selection.ok) {
       result.status = 'date_selection_not_verified';
       result.diagnostics = await diagnostics(page);
+      console.log('DATE_SELECTION_DIAGNOSTICS ' + JSON.stringify({
+        destination: destination.code, outbound, returning,
+        selection: result.date_selection, diagnostics: result.diagnostics
+      }));
       return result;
     }
 
