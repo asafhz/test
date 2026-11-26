@@ -9,28 +9,88 @@ if (!apiKey || !from || !to) {
   process.exit(0);
 }
 
-const summary = await fs.readFile('results/summary.md', 'utf8').catch(() => '# Air Haifa search report\n\nThe search did not produce a summary file.');
-const csv = await fs.readFile('results/results.csv').catch(() => null);
-const json = await fs.readFile('results/results.json', 'utf8').catch(() => null);
-let statusLine = 'Search status: unknown';
-if (json) {
-  try {
-    const report = JSON.parse(json);
-    const counts = {};
-    for (const row of report.results || []) counts[row.status] = (counts[row.status] || 0) + 1;
-    statusLine = 'Searches: ' + (report.results || []).length + ' · Statuses: ' + JSON.stringify(counts);
-  } catch {}
-}
+const jsonText = await fs.readFile('results/results.json', 'utf8').catch(() => null);
+let report = null;
+try { report = jsonText ? JSON.parse(jsonText) : null; } catch {}
+const results = Array.isArray(report?.results) ? report.results : [];
 
-const escapeHtml = value => value.replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+// Only send a flight card when the scraper has verified every field needed
+// for a booking decision. Generic landing-page "from" prices are not offers.
+const offers = results.filter(row =>
+  row.status === 'verified_offer' &&
+  row.outbound_departure_time &&
+  row.return_departure_time &&
+  Number.isFinite(Number(row.total_price)) &&
+  row.currency &&
+  /^https:\/\//i.test(row.booking_url || '')
+);
+
+const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({
+  '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'
+}[ch]));
+const formatDate = value => {
+  if (!value) return 'לא אומת';
+  const d = new Date(value + 'T12:00:00');
+  return Number.isNaN(d.getTime()) ? escapeHtml(value) :
+    new Intl.DateTimeFormat('he-IL', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(d);
+};
+const offerCard = row => {
+  const destination = row.destination === 'LCA' ? 'לרנקה' : row.destination === 'PFO' ? 'פאפוס' : escapeHtml(row.destination);
+  const total = new Intl.NumberFormat('he-IL', { maximumFractionDigits: 2 }).format(Number(row.total_price));
+  return `
+    <article style="border:1px solid #dce2ea;border-radius:12px;padding:18px;margin:0 0 14px;background:#fff">
+      <h3 style="margin:0 0 14px;font-size:18px;color:#172033">חיפה ← ${destination}</h3>
+      <table role="presentation" style="width:100%;border-collapse:collapse;font-size:14px">
+        <tr><td style="padding:7px 0;color:#64748b">המראה</td><td dir="rtl" style="padding:7px 0;text-align:left;font-weight:600">${formatDate(row.outbound)} · ${escapeHtml(row.outbound_departure_time)}</td></tr>
+        <tr><td style="padding:7px 0;color:#64748b">חזרה</td><td dir="rtl" style="padding:7px 0;text-align:left;font-weight:600">${formatDate(row.return)} · ${escapeHtml(row.return_departure_time)}</td></tr>
+        <tr><td style="padding:7px 0;color:#64748b">נוסעים</td><td style="padding:7px 0;text-align:left">${escapeHtml(row.passengers || report?.passengers || 'לא צוין')}</td></tr>
+        <tr><td style="padding:7px 0;color:#64748b">מחיר כולל</td><td style="padding:7px 0;text-align:left;font-size:20px;font-weight:700;color:#0f172a">${total} ${escapeHtml(row.currency)}</td></tr>
+      </table>
+      <p style="margin:14px 0 0"><a href="${escapeHtml(row.booking_url)}" style="display:inline-block;background:#155eef;color:#fff;text-decoration:none;padding:11px 18px;border-radius:8px;font-weight:600">מעבר להזמנה</a></p>
+    </article>`;
+};
+
+const settings = [
+  report?.passengers ? 'נוסעים: ' + report.passengers : null,
+  report?.baggage_included === true ? 'כבודה כלולה במחיר' : 'כבודה לא אומתה / אינה כלולה בחישוב',
+  report?.coupon_applied ? 'קופון הוחל' : 'ללא קופון'
+].filter(Boolean).join(' · ');
+
+const body = offers.length
+  ? offers.map(offerCard).join('')
+  : `<div style="border:1px solid #f0c36d;background:#fff8e6;border-radius:10px;padding:16px;line-height:1.6">
+      <strong>לא נמצאו כרגע הצעות מאומתות לשליחה.</strong><br>
+      הסריקה האחרונה לא סיפקה יחד את זמני ההמראה והחזרה, המחיר הכולל וקישור ההזמנה הישיר. מחירי "החל מ-" מדפי היעד לא יוצגו כהצעות, כדי לא להטעות.
+    </div>`;
+
+const html = `<!doctype html><html lang="he" dir="rtl"><body style="margin:0;background:#f4f6fa;font-family:Arial,sans-serif;color:#172033">
+  <main style="max-width:680px;margin:0 auto;padding:24px 16px">
+    <h2 style="margin:0 0 8px">טיסות אייר חיפה · קיץ 2027</h2>
+    <p style="margin:0 0 18px;color:#64748b;font-size:13px">${escapeHtml(settings || 'הגדרות חיפוש לא זמינות')}</p>
+    ${body}
+    <p style="font-size:12px;color:#64748b;line-height:1.6;margin-top:18px">
+      כל הצעה מוצגת רק לאחר אימות פרטי הטיסות. המחיר הכולל הוא עבור הרכב הנוסעים שמופיע בכרטיס; יש לבדוק באתר חברת התעופה את תנאי הכבודה, שינוי וביטול לפני התשלום.
+    </p>
+  </main></body></html>`;
+
+const textBody = offers.length
+  ? offers.map(row => [
+      'חיפה → ' + row.destination,
+      'המראה: ' + row.outbound + ' ' + row.outbound_departure_time,
+      'חזרה: ' + row.return + ' ' + row.return_departure_time,
+      'מחיר כולל: ' + row.total_price + ' ' + row.currency,
+      'הזמנה: ' + row.booking_url
+    ].join('\n')).join('\n\n')
+  : 'לא נמצאו הצעות מאומתות. חסרים זמני טיסות, מחיר כולל וקישור הזמנה ישיר. מחירי "החל מ-" לא יוצגו כהצעות.';
+
 const payload = {
   from,
   to: [to],
-  subject: 'Air Haifa – Summer 2027 flight search report',
-  html: '<h2>Air Haifa – Summer 2027</h2><p>' + escapeHtml(statusLine) +
-    '</p><pre style="white-space:pre-wrap;font-family:Arial,sans-serif">' + escapeHtml(summary) + '</pre>' +
-    '<p>Search settings: 1 adult, no baggage, no coupon. Prices are candidates only and must be verified on Air Haifa.</p>',
-  attachments: csv ? [{ filename: 'results.csv', content: csv.toString('base64') }] : []
+  subject: offers.length
+    ? `אייר חיפה – ${offers.length} הצעות טיסה מאומתות לקיץ 2027`
+    : 'אייר חיפה – אין עדיין הצעות מאומתות לקיץ 2027',
+  html,
+  text: textBody
 };
 
 const response = await fetch('https://api.resend.com/emails', {
