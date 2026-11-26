@@ -38,16 +38,30 @@ const offerCard = row => {
   const destination = row.destination === 'LCA' ? 'לרנקה' : row.destination === 'PFO' ? 'פאפוס' : escapeHtml(row.destination);
   const total = new Intl.NumberFormat('he-IL', { maximumFractionDigits: 2 }).format(Number(row.total_price));
   return `
-    <article style="border:1px solid #dce2ea;border-radius:12px;padding:18px;margin:0 0 14px;background:#fff">
-      <h3 style="margin:0 0 14px;font-size:18px;color:#172033">חיפה ← ${destination}</h3>
-      <table role="presentation" style="width:100%;border-collapse:collapse;font-size:14px">
-        <tr><td style="padding:7px 0;color:#64748b">המראה</td><td dir="rtl" style="padding:7px 0;text-align:left;font-weight:600">${formatDate(row.outbound)} · ${escapeHtml(row.outbound_departure_time)}</td></tr>
-        <tr><td style="padding:7px 0;color:#64748b">חזרה</td><td dir="rtl" style="padding:7px 0;text-align:left;font-weight:600">${formatDate(row.return)} · ${escapeHtml(row.return_departure_time)}</td></tr>
-        <tr><td style="padding:7px 0;color:#64748b">נוסעים</td><td style="padding:7px 0;text-align:left">${escapeHtml(row.passengers || report?.passengers || 'לא צוין')}</td></tr>
-        <tr><td style="padding:7px 0;color:#64748b">מחיר כולל</td><td style="padding:7px 0;text-align:left;font-size:20px;font-weight:700;color:#0f172a">${total} ${escapeHtml(row.currency)}</td></tr>
+    <div style="border:1px solid #dce2ea;border-radius:12px;padding:16px;margin:0 0 14px;background:#fff;box-sizing:border-box;width:100%">
+      <h3 style="margin:0 0 14px;font-size:18px;line-height:1.35;color:#172033">חיפה ← ${destination}</h3>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;border-collapse:collapse;font-size:14px;table-layout:fixed">
+        <tr>
+          <td width="34%" style="padding:10px 0;border-bottom:1px solid #edf0f4;color:#64748b;vertical-align:top">המראה</td>
+          <td dir="rtl" style="padding:10px 0;border-bottom:1px solid #edf0f4;text-align:right;font-weight:600;line-height:1.5;overflow-wrap:anywhere">${formatDate(row.outbound)}<br>${escapeHtml(row.outbound_departure_time)}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 0;border-bottom:1px solid #edf0f4;color:#64748b;vertical-align:top">חזרה</td>
+          <td dir="rtl" style="padding:10px 0;border-bottom:1px solid #edf0f4;text-align:right;font-weight:600;line-height:1.5;overflow-wrap:anywhere">${formatDate(row.return)}<br>${escapeHtml(row.return_departure_time)}</td>
+        </tr>
+        <tr>
+          <td style="padding:10px 0;border-bottom:1px solid #edf0f4;color:#64748b;vertical-align:top">נוסעים</td>
+          <td style="padding:10px 0;border-bottom:1px solid #edf0f4;text-align:right;overflow-wrap:anywhere">${escapeHtml(row.passengers || report?.passengers || 'לא צוין')}</td>
+        </tr>
+        <tr>
+          <td style="padding:12px 0 4px;color:#64748b;vertical-align:top">מחיר כולל</td>
+          <td style="padding:12px 0 4px;text-align:right;font-size:21px;line-height:1.3;font-weight:700;color:#0f172a;overflow-wrap:anywhere">${total} ${escapeHtml(row.currency)}</td>
+        </tr>
       </table>
-      <p style="margin:14px 0 0"><a href="${escapeHtml(row.booking_url)}" style="display:inline-block;background:#155eef;color:#fff;text-decoration:none;padding:11px 18px;border-radius:8px;font-weight:600">מעבר להזמנה</a></p>
-    </article>`;
+      <div style="margin:16px 0 0">
+        <a href="${escapeHtml(row.booking_url)}" style="display:block;box-sizing:border-box;width:100%;background:#155eef;color:#fff;text-align:center;text-decoration:none;padding:14px 16px;border-radius:8px;font-size:16px;line-height:1.3;font-weight:700">מעבר להזמנה</a>
+      </div>
+    </div>`;
 };
 
 const settings = [
@@ -63,15 +77,42 @@ const body = offers.length
       הסריקה האחרונה לא סיפקה יחד את זמני ההמראה והחזרה, המחיר הכולל וקישור ההזמנה הישיר. מחירי "החל מ-" מדפי היעד לא יוצגו כהצעות, כדי לא להטעות.
     </div>`;
 
-const html = `<!doctype html><html lang="he" dir="rtl"><body style="margin:0;background:#f4f6fa;font-family:Arial,sans-serif;color:#172033">
-  <main style="max-width:680px;margin:0 auto;padding:24px 16px">
-    <h2 style="margin:0 0 8px">טיסות אייר חיפה · קיץ 2027</h2>
-    <p style="margin:0 0 18px;color:#64748b;font-size:13px">${escapeHtml(settings || 'הגדרות חיפוש לא זמינות')}</p>
-    ${body}
-    <p style="font-size:12px;color:#64748b;line-height:1.6;margin-top:18px">
-      כל הצעה מוצגת רק לאחר אימות פרטי הטיסות. המחיר הכולל הוא עבור הרכב הנוסעים שמופיע בכרטיס; יש לבדוק באתר חברת התעופה את תנאי הכבודה, שינוי וביטול לפני התשלום.
-    </p>
-  </main></body></html>`;
+const html = `<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="x-apple-disable-message-reformatting">
+  <title>טיסות אייר חיפה · קיץ 2027</title>
+  <style>
+    body { margin:0 !important; padding:0 !important; width:100% !important; background:#f4f6fa; }
+    table { border-collapse:collapse; }
+    a { -webkit-text-size-adjust:100%; }
+    @media screen and (max-width:600px) {
+      .email-shell { width:100% !important; }
+      .email-padding { padding:16px 12px !important; }
+      .email-title { font-size:21px !important; }
+      .flight-card { padding:14px !important; }
+      .booking-link { width:100% !important; box-sizing:border-box !important; display:block !important; }
+    }
+  </style>
+</head>
+<body style="margin:0;padding:0;width:100%;background:#f4f6fa;font-family:Arial,sans-serif;color:#172033;-webkit-text-size-adjust:100%">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#f4f6fa">
+    <tr><td align="center" style="padding:0">
+      <table role="presentation" class="email-shell" width="680" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:680px">
+        <tr><td class="email-padding" dir="rtl" style="padding:24px 16px">
+          <h2 class="email-title" style="margin:0 0 8px;font-size:24px;line-height:1.3">טיסות אייר חיפה · קיץ 2027</h2>
+          <p style="margin:0 0 18px;color:#64748b;font-size:13px;line-height:1.6;overflow-wrap:anywhere">${escapeHtml(settings || 'הגדרות חיפוש לא זמינות')}</p>
+          ${body}
+          <p style="font-size:12px;color:#64748b;line-height:1.7;margin:18px 0 0">
+            כל הצעה מוצגת רק לאחר אימות פרטי הטיסות. המחיר הכולל הוא עבור הרכב הנוסעים שמופיע בכרטיס; יש לבדוק באתר חברת התעופה את תנאי הכבודה, שינוי וביטול לפני התשלום.
+          </p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`;
 
 const textBody = offers.length
   ? offers.map(row => [
