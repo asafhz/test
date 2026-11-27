@@ -118,8 +118,14 @@ async function selectTripDates(page, outbound, returning) {
       })).slice(0,30),
     dayButtons: [...document.querySelectorAll('button')]
       .filter(e => e.offsetWidth || e.offsetHeight)
-      .map(e => ({text:(e.innerText||'').trim(),att:e.getAttribute('data-att'),aria:e.getAttribute('aria-label'),disabled:e.disabled}))
-      .filter(x => /^\\d{1,2}$/.test(x.text) || (x.att||'').includes('day')).slice(0,100),
+      .map(e => ({text:(e.innerText||'').trim(),att:e.getAttribute('data-att'),aria:e.getAttribute('aria-label'),title:e.title,cls:String(e.className||''),disabled:e.disabled}))
+      .filter(x => /^\\d{1,2}$/.test(x.text) || (x.att||'').toLowerCase().includes('day')).slice(0,140),
+    calendarMarkup: (() => {
+      const node = [...document.querySelectorAll('*')].find(e => e.children.length < 5 && (e.innerText||'').trim() === 'נובמבר 2026');
+      let p = node;
+      for (let i=0; i<5 && p; i++, p=p.parentElement) if (p.querySelectorAll('button').length > 15) return p.outerHTML.slice(0,18000);
+      return node?.parentElement?.parentElement?.outerHTML.slice(0,18000) || null;
+    })(),
     inputs: [...document.querySelectorAll('input[placeholder="DD/MM/YYYY"]')].map(e=>({value:e.value,readonly:e.readOnly}))
   }));
   return {
