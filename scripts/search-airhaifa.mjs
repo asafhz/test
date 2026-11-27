@@ -18,7 +18,7 @@ const OUT = 'results';
 // Prices vary by flight and are re-priced live during booking; keep them separate
 // from the pre-passenger fare total and label the calculation as an estimate.
 const BAGGAGE = {
-  checkedBags: Math.max(0, Number.parseInt(process.env.CHECKED_BAGS || '0', 10) || 0),
+  checkedBags: Math.max(0, Number.parseInt(process.env.CHECKED_BAGS || '1', 10) || 0),
   trolleys: Math.max(0, Number.parseInt(process.env.TROLLEYS || '0', 10) || 0),
   checkedUsdPerFlight: 55,
   trolleyUsdPerFlight: 32,
@@ -325,8 +325,8 @@ async function searchOne(browser, destination, outbound, returning) {
       pricing_note: 'Official published Cyprus rates; actual price varies by flight and is shown live during booking.',
       source: BAGGAGE.source
     };
-    result.estimated_total_with_baggage = result.base_fare_total;
-    result.estimated_total_currency = result.currency;
+    result.estimated_total_with_baggage = null; // Fare is EUR and baggage estimate is USD; never add unlike currencies.
+    result.estimated_total_currency = null;
     result.baggage_estimate_separate = result.baggage.estimated_cost;
     result.baggage_estimate_currency = BAGGAGE.currency;
     result.booking_url = page.url();
