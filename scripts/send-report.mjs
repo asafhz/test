@@ -122,7 +122,8 @@ const textBody = offers.length
       'חיפה → ' + row.destination,
       'המראה: ' + row.outbound + ' ' + row.outbound_departure_time,
       'חזרה: ' + row.return + ' ' + row.return_departure_time,
-      'מחיר טיסות לפני פרטי נוסעים: ' + (row.base_fare_total ?? row.total_price) + ' ' + row.currency,\n      'כבודה (הערכה נפרדת): ' + (row.baggage?.estimated_cost ?? 'לא חושב') + ' ' + (row.baggage?.currency || ''),
+      'מחיר טיסות לפני פרטי נוסעים: ' + (row.base_fare_total ?? row.total_price) + ' ' + row.currency,
+      'כבודה (הערכה נפרדת): ' + (row.baggage?.estimated_cost ?? 'לא חושב') + ' ' + (row.baggage?.currency || ''),
       'הזמנה: ' + row.booking_url
     ].join('\n')).join('\n\n')
   : 'לא נמצאו הצעות מאומתות. חסרים זמני טיסות, מחיר כולל וקישור הזמנה ישיר. מחירי "החל מ-" לא יוצגו כהצעות.';
