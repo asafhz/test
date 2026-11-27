@@ -60,6 +60,7 @@ const offerCard = row => {
           <td style="padding:12px 0 4px;text-align:right;font-size:21px;line-height:1.3;font-weight:700;color:#0f172a;overflow-wrap:anywhere">${total} ${escapeHtml(row.currency)}</td>
         </tr>
       </table>
+      <p style="margin:8px 0 0;color:#475569;font-size:13px;line-height:1.6">${baggageLine}</p>
       <div style="margin:16px 0 0">
         <a href="${escapeHtml(row.booking_url)}" style="display:block;box-sizing:border-box;width:100%;background:#155eef;color:#fff;text-align:center;text-decoration:none;padding:14px 16px;border-radius:8px;font-size:16px;line-height:1.3;font-weight:700">מעבר להזמנה</a>
       </div>
