@@ -197,6 +197,12 @@ async function searchOne(browser, destination, outbound, returning) {
     }
     result.origin_selected = await chooseRoute(page, /מאיפה|מוצא|from/i, 'HFA');
     result.destination_selected = await chooseRoute(page, /לאן|יעד|to/i, destination.code);
+    if (!result.origin_selected || !result.destination_selected) {
+      result.status = 'route_selection_not_verified';
+      result.diagnostics = await diagnostics(page);
+      await page.screenshot({ path: OUT + '/' + destination.code + '-' + outbound + '-route-not-verified.png', fullPage: true }).catch(() => {});
+      return result;
+    }
     result.date_selection = await selectTripDates(page, outbound, returning);
     result.selected_date_values = result.date_selection.state;
     if (!result.date_selection.ok) {
@@ -389,6 +395,7 @@ async function main() {
   if (process.env.GITHUB_STEP_SUMMARY) {
     await fs.appendFile(process.env.GITHUB_STEP_SUMMARY, markdown + '\n');
   }
-  console.log('Completed ' + results.length + ' searches; visible price candidates: ' + candidates.length);\n  if (candidates.length === 0) { console.error('No verified offers; marking workflow as failed instead of reporting success.'); process.exitCode = 2; }
+  console.log('Completed ' + results.length + ' searches; visible price candidates: ' + candidates.length);
+  if (candidates.length === 0) { console.error('No verified offers; marking workflow as failed instead of reporting success.'); process.exitCode = 2; }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
