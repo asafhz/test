@@ -14,6 +14,17 @@ const DATES = [
   ['2027-08-08', '2027-08-12'], ['2027-08-09', '2027-08-13']
 ];
 const OUT = 'results';
+// Air Haifa publishes indicative Cyprus baggage prices per passenger, per flight.
+// Prices vary by flight and are re-priced live during booking; keep them separate
+// from the pre-passenger fare total and label the calculation as an estimate.
+const BAGGAGE = {
+  checkedBags: Math.max(0, Number.parseInt(process.env.CHECKED_BAGS || '0', 10) || 0),
+  trolleys: Math.max(0, Number.parseInt(process.env.TROLLEYS || '0', 10) || 0),
+  checkedUsdPerFlight: 55,
+  trolleyUsdPerFlight: 32,
+  currency: 'USD',
+  source: 'https://airhaifa.com/travelinfo-he/baggage-information'
+};
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const dmy = iso => { const [y, m, d] = iso.split('-'); return d + '/' + m + '/' + y; };
 
@@ -278,20 +289,54 @@ async function searchOne(browser, destination, outbound, returning) {
     await page.locator('.flightChoice_select').nth(cheapestReturn.index).click({ timeout: 7000 });
     await wait(2500);
 
-    result.total_text = await page.locator('.totalPrice').first().innerText().catch(() => '');
+    // Capture the fare from the flight-selection summary, before passenger details.
+    // This is intentionally independent from baggage, which is an optional add-on.
+    const fareSnapshot = await page.evaluate(() => {
+      const total = document.querySelector('.totalPrice');
+      const passengerForm = document.querySelector(
+        'input[autocomplete="given-name"], input[name*="firstName" i], input[placeholder*="שם פרטי"], input[placeholder*="First name" i]'
+      );
+      return {
+        totalText: (total?.innerText || total?.textContent || '').trim(),
+        totalVisible: !!total && !!(total.offsetWidth || total.offsetHeight || total.getClientRects().length),
+        passengerFormVisible: !!passengerForm &&
+          !!(passengerForm.offsetWidth || passengerForm.offsetHeight || passengerForm.getClientRects().length),
+        pageText: (document.body?.innerText || '').slice(0, 3500)
+      };
+    });
+    result.fare_capture_stage = 'after_both_flights_selected_before_passenger_details';
+    result.passenger_details_started = fareSnapshot.passengerFormVisible;
+    result.total_text = fareSnapshot.totalText;
+    result.base_fare_total = parsePrice(fareSnapshot.totalText);
     result.outbound_price = cheapestOutbound.price;
     result.return_price = cheapestReturn.price;
     result.currency = 'EUR';
-    result.computed_total = Math.round((cheapestOutbound.price + cheapestReturn.price) * 100) / 100;
-    result.total_price = parsePrice(result.total_text);
+    result.legs_sum = Math.round((cheapestOutbound.price + cheapestReturn.price) * 100) / 100;
+    result.baggage = {
+      checked_bags: BAGGAGE.checkedBags,
+      trolleys: BAGGAGE.trolleys,
+      checked_usd_per_flight_per_bag: BAGGAGE.checkedUsdPerFlight,
+      trolley_usd_per_flight_per_bag: BAGGAGE.trolleyUsdPerFlight,
+      flights: 2,
+      estimated_cost: Math.round((BAGGAGE.checkedBags * BAGGAGE.checkedUsdPerFlight +
+        BAGGAGE.trolleys * BAGGAGE.trolleyUsdPerFlight) * 2 * 100) / 100,
+      currency: BAGGAGE.currency,
+      is_estimate: true,
+      pricing_note: 'Official published Cyprus rates; actual price varies by flight and is shown live during booking.',
+      source: BAGGAGE.source
+    };
+    result.estimated_total_with_baggage = result.base_fare_total;
+    result.estimated_total_currency = result.currency;
+    result.baggage_estimate_separate = result.baggage.estimated_cost;
+    result.baggage_estimate_currency = BAGGAGE.currency;
     result.booking_url = page.url();
 
-    const totalMatchesLegs = result.total_price !== null &&
-      Math.abs(result.total_price - result.computed_total) < 0.02;
     if (!cheapestOutbound.flight_number || !cheapestReturn.flight_number ||
-        !totalMatchesLegs || !/^https:\/\//i.test(result.booking_url)) {
-      result.status = 'total_or_itinerary_not_verified';
-      await page.screenshot({ path: OUT + '/' + destination.code + '-' + outbound + '-total-not-verified.png', fullPage: true }).catch(() => {});
+        result.base_fare_total === null || !fareSnapshot.totalVisible ||
+        fareSnapshot.passengerFormVisible || !/^https:\/\//i.test(result.booking_url)) {
+      result.status = 'pre_passenger_fare_not_verified';
+      result.fare_snapshot_diagnostics = fareSnapshot;
+      await page.screenshot({ path: OUT + '/' + destination.code + '-' + outbound + '-fare-not-verified.png', fullPage: true }).catch(() => {});
       return result;
     }
     result.outbound_departure_time = cheapestOutbound.departure_time;
@@ -319,7 +364,7 @@ async function main() {
         console.log(destination.code + ': ' + outbound + ' -> ' + returning);
         const row = await searchOne(browser, destination, outbound, returning);
         results.push(row);
-        console.log(row.status + ': ' + JSON.stringify({ outbound: row.selected_outbound, returning: row.selected_return, total: row.total_price, total_text: row.total_text }));
+        console.log(row.status + ': ' + JSON.stringify({ outbound: row.selected_outbound, returning: row.selected_return, base_fare_total: row.base_fare_total, total_text: row.total_text, error: row.error, stage: row.fare_capture_stage }));
         await wait(1500);
       }
     }
@@ -328,7 +373,7 @@ async function main() {
   }
   const candidates = results.filter(row => row.status === 'verified_offer').map(row => ({
     destination: row.destination, outbound: row.outbound, return: row.return,
-    amount: row.total_price, currency: row.currency,
+    amount: row.base_fare_total, currency: row.currency, baggage_estimate: row.baggage?.estimated_cost, baggage_currency: row.baggage?.currency, estimated_total_with_baggage: row.estimated_total_with_baggage,
     outbound_departure_time: row.outbound_departure_time,
     return_departure_time: row.return_departure_time,
     booking_url: row.booking_url
@@ -336,19 +381,19 @@ async function main() {
   const report = {
     generated_at: new Date().toISOString(), origin: 'HFA',
     destinations: ['LCA', 'PFO'], passengers: '1 adult',
-    baggage_included: false, coupon_applied: false, date_pairs: DATES,
+    baggage_included: false, baggage: BAGGAGE, coupon_applied: false, date_pairs: DATES,
     cheapest_verified_offer: candidates[0] || null,
-    warning: 'An offer is included only when both flight legs are selected and the displayed cart total matches the sum of the two leg prices. Baggage, seats and optional extras are not included. No booking or payment is performed.',
+    warning: 'Base fare is captured from the flight-selection summary before passenger details. Baggage is calculated separately as an estimate using published Cyprus rates; live booking prices vary by flight. No booking or payment is performed.',
     results
   };
   await fs.writeFile(OUT + '/results.json', JSON.stringify(report, null, 2));
-  const csvRows = ['destination,outbound,return,status,outbound_flight,outbound_time,outbound_price,return_flight,return_time,return_price,total_price,currency,booking_url'];
+  const csvRows = ['destination,outbound,return,status,outbound_flight,outbound_time,outbound_price,return_flight,return_time,return_price,base_fare_total,currency,checked_bags,trolleys,baggage_estimate,baggage_currency,estimated_total_with_baggage,booking_url'];
   for (const row of results) {
     csvRows.push([
       row.destination, row.outbound, row.return, row.status,
       row.selected_outbound?.flight_number, row.selected_outbound?.departure_time, row.outbound_price,
       row.selected_return?.flight_number, row.selected_return?.departure_time, row.return_price,
-      row.total_price, row.currency, row.booking_url
+      row.base_fare_total, row.currency, row.baggage?.checked_bags, row.baggage?.trolleys, row.baggage?.estimated_cost, row.baggage?.currency, row.estimated_total_with_baggage, row.booking_url
     ].map(value => '"' + String(value ?? '').replaceAll('"', '""') + '"').join(','));
   }
   await fs.writeFile(OUT + '/results.csv', csvRows.join('\n'));
@@ -357,18 +402,18 @@ async function main() {
   const lines = [
     '# Air Haifa – Summer 2027', '',
     'Generated: ' + report.generated_at,
-    'Passengers: 1 adult. No baggage or coupon included.', '',
+    'Passengers: 1 adult. Base fare before passenger details; baggage estimate shown separately.', '',
     'Searches attempted: ' + results.length,
     'Verified round-trip offers: ' + candidates.length,
     'Statuses: ' + JSON.stringify(counts),
-    candidates[0] ? 'Lowest verified round-trip total: ' + candidates[0].currency + ' ' + candidates[0].amount + ' – ' + candidates[0].destination + ', ' + candidates[0].outbound + ' to ' + candidates[0].return : 'No verified round-trip offer extracted.',
+    candidates[0] ? 'Lowest verified base fare: ' + candidates[0].currency + ' ' + candidates[0].amount + ' – ' + candidates[0].destination + ', ' + candidates[0].outbound + ' to ' + candidates[0].return : 'No verified round-trip offer extracted.',
     '', report.warning, '',
-    '| Destination | Dates | Status | Outbound | Return | Total |',
+    '| Destination | Dates | Status | Outbound | Return | Base fare |',
     '|---|---|---|---|---|---|',
     ...results.map(row => '| ' + row.destination + ' | ' + row.outbound + ' → ' + row.return + ' | ' +
       row.status + ' | ' + (row.selected_outbound ? row.selected_outbound.departure_time + ' / ' + row.outbound_price : '—') +
       ' | ' + (row.selected_return ? row.selected_return.departure_time + ' / ' + row.return_price : '—') +
-      ' | ' + (row.total_price != null ? row.currency + ' ' + row.total_price : '—') + ' |')
+      ' | ' + (row.base_fare_total != null ? row.currency + ' ' + row.base_fare_total : '—') + ' |')
   ];
   const markdown = lines.join('\n');
   await fs.writeFile(OUT + '/summary.md', markdown);
