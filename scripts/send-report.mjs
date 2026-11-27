@@ -56,7 +56,7 @@ const offerCard = row => {
           <td style="padding:10px 0;border-bottom:1px solid #edf0f4;text-align:right;overflow-wrap:anywhere">${escapeHtml(row.passengers || report?.passengers || 'לא צוין')}</td>
         </tr>
         <tr>
-          <td style="padding:12px 0 4px;color:#64748b;vertical-align:top">מחיר כולל</td>
+          <td style="padding:12px 0 4px;color:#64748b;vertical-align:top">מחיר טיסות לפני פרטי נוסעים</td>
           <td style="padding:12px 0 4px;text-align:right;font-size:21px;line-height:1.3;font-weight:700;color:#0f172a;overflow-wrap:anywhere">${total} ${escapeHtml(row.currency)}</td>
         </tr>
       </table>
