@@ -40,125 +40,94 @@ async function clickFirst(locator, timeout = 2500) {
 }
 
 async function chooseRoute(page, label, code) {
-  const field = page.getByRole('button', { name: label }).first();
-  if (!(await field.count())) return false;
-  const current = await field.innerText().catch(() => '');
-  const expected = code === 'HFA' ? /חיפה|Haifa|HFA/i :
+  const placeholder = code === 'HFA' ? 'מאיפה?' : 'לאן?';
+  const expectedValue = code === 'HFA' ? /חיפה|Haifa|HFA/i :
     code === 'LCA' ? /לרנקה|Larnaca|LCA/i : /פאפוס|Paphos|PFO/i;
-  if (expected.test(current)) return true;
-  if (!(await clickFirst(field))) return false;
+  const city = code === 'HFA' ? 'חיפה' : code === 'LCA' ? 'לרנקה' : 'פאפוס';
+  const field = page.locator('input[placeholder="' + placeholder + '"]').first();
+
+  // The current Air Haifa homepage uses INPUT fields, not the old role=button
+  // selectors. The previous implementation therefore never selected HFA.
+  if (await field.count()) {
+    const current = await field.inputValue().catch(() => '');
+    if (expectedValue.test(current)) return true;
+    await field.click({ timeout: 7000 });
+    await field.fill(city, { timeout: 7000 });
+    await wait(700);
+    const suggestion = page.getByText(expectedValue, { exact: false }).filter({ visible: true }).first();
+    if (await suggestion.count()) {
+      await suggestion.click({ timeout: 5000 }).catch(async () => {
+        await field.press('ArrowDown').catch(() => {});
+        await field.press('Enter').catch(() => {});
+      });
+    } else {
+      await field.press('ArrowDown').catch(() => {});
+      await field.press('Enter').catch(() => {});
+    }
+    await wait(350);
+    const selected = await field.inputValue().catch(() => '');
+    return expectedValue.test(selected);
+  }
+
+  // Legacy fallback for alternate widget versions.
+  const button = page.getByRole('button', { name: label }).first();
+  if (!(await button.count())) return false;
+  const current = await button.innerText().catch(() => '');
+  if (expectedValue.test(current)) return true;
+  if (!(await clickFirst(button))) return false;
   await wait(350);
-  const option = code === 'HFA' ? /חיפה.*HFA|Haifa.*HFA|HFA.*חיפה/i :
-    code === 'LCA' ? /לרנקה.*LCA|Larnaca.*LCA|LCA.*לרנקה/i :
-    /פאפוס.*PFO|Paphos.*PFO|PFO.*פאפוס/i;
-  return await clickFirst(page.getByText(option)) ||
-    await clickFirst(page.getByRole('option', { name: option }));
+  return await clickFirst(page.getByText(expectedValue));
 }
 
 async function selectTripDates(page, outbound, returning) {
   const expectedOutbound = dmy(outbound);
   const expectedReturn = dmy(returning);
+  const inputs = page.locator('input[placeholder="DD/MM/YYYY"]');
 
-  // The live Air Haifa widget uses dedicated trigger buttons and a two-month
-  // calendar. Do not assume its initial month or a fixed number of clicks.
-  // Air Haifa changed the booking widget markup: the old date-input-17/18
-  // classes are no longer guaranteed. Prefer stable accessible labels and
-  // retain the legacy selectors as fallbacks.
-  const departureTrigger = page.locator(
-    'button.date-input-17-trigger, button[aria-label*="בחירת תאריך יציאה"], button[aria-label*="Departure date"]'
-  ).first();
-  if (!(await departureTrigger.count())) {
-    const fallback = page.getByRole('button', { name: /בחירת תאריך יציאה|Departure date/i }).first();
-    if (!(await fallback.count())) return { ok: false, reason: 'departure_date_trigger_missing', diagnostics: await diagnostics(page) };
-    await fallback.click({ timeout: 7000 });
-  } else {
-    await departureTrigger.click({ timeout: 7000 });
-  }
-
-  // Calendar container selectors have also varied between widget releases.
-  let dialog = page.locator('[data-testid="date-container"]').first();
-  try {
-    await dialog.waitFor({ state: 'visible', timeout: 5000 });
-  } catch {
-    dialog = page.locator('[role="dialog"]:visible').first();
-    if (!(await dialog.count())) dialog = page.locator('body');
-    await page.waitForFunction(() =>
-      !!document.querySelector('h2[id^="month-"]') ||
-      !!document.querySelector('button[data-att^="day-"]'),
-      { timeout: 10000 }
-    );
-  }
-
-  async function ensureMonthVisible(iso) {
-    const targetMonth = iso.slice(0, 7);
-    for (let attempt = 0; attempt < 24; attempt++) {
-      const headings = await dialog.locator('h2[id^="month-"]').evaluateAll(nodes =>
-        nodes.map(node => ({ id: node.id, text: (node.innerText || '').trim() }))
-      );
-      if (headings.some(item => item.id === 'month-' + targetMonth)) return headings;
-
-      const visibleMonths = headings.map(item => item.id.replace('month-', '')).filter(Boolean).sort();
-      if (visibleMonths.length && targetMonth < visibleMonths[0]) {
-        const prev = dialog.locator('button[data-att="prev-month"]');
-        if (!(await prev.count()) || await prev.isDisabled()) {
-          throw new Error('target_month_before_calendar_range:' + targetMonth);
-        }
-        await prev.click({ timeout: 3000 });
-      } else {
-        const next = dialog.locator('button[data-att="next-month"]');
-        if (!(await next.count()) || await next.isDisabled()) {
-          throw new Error('next_month_button_unavailable:' + targetMonth);
-        }
-        await next.click({ timeout: 3000 });
+  // Current widget exposes two editable date inputs. Use them directly first;
+  // unlike the retired month-YYYY/day-YYYY-MM-DD selectors, these are present
+  // in the current live page DOM.
+  if (await inputs.count() >= 2) {
+    const first = inputs.nth(0);
+    const second = inputs.nth(1);
+    try {
+      await first.fill(expectedOutbound, { timeout: 5000 });
+      await first.press('Tab').catch(() => {});
+      await second.fill(expectedReturn, { timeout: 5000 });
+      await second.press('Tab').catch(() => {});
+      await wait(500);
+      const values = await inputs.evaluateAll(nodes => nodes.map(n => n.value));
+      if (values.includes(expectedOutbound) && values.includes(expectedReturn)) {
+        return { ok: true, expected: [expectedOutbound, expectedReturn], state: { inputs: values }, method: 'direct-date-inputs' };
       }
-      await wait(120);
-    }
-    throw new Error('target_month_not_reached:' + targetMonth);
-  }
-
-  async function chooseDay(iso, rangeLabel) {
-    await ensureMonthVisible(iso);
-    const day = dialog.locator('button[data-att="day-' + iso + '"]');
-    await day.waitFor({ state: 'visible', timeout: 7000 });
-    if (await day.isDisabled()) throw new Error('date_disabled:' + iso);
-    await day.click({ timeout: 5000 });
-    await wait(300);
-    const label = await day.getAttribute('aria-label').catch(() => '');
-    if (rangeLabel && label && !label.includes(rangeLabel)) {
-      // aria-label can update asynchronously after the range selection.
-      await wait(250);
+    } catch (error) {
+      // Continue to calendar interaction if inputs are read-only.
     }
   }
 
-  await chooseDay(outbound, 'Start of Range');
-  await chooseDay(returning, 'End of Range');
-
-  const done = dialog.locator('button[data-att="done"]');
-  if (await done.count() && await done.isVisible().catch(() => false)) {
-    await done.click({ timeout: 3000 });
-  }
+  // Calendar fallback: use current input fields to open the range picker, then
+  // inspect actual visible month/day controls instead of relying on old IDs.
+  const trigger = page.getByRole('button', { name: /בחירת תאריך יציאה|Departure date/i }).first();
+  if (await trigger.count()) await trigger.click({ timeout: 7000 });
   await wait(300);
 
-  const state = await page.evaluate(() => {
-    const read = selector => {
-      const node = document.querySelector(selector);
-      return node ? ((node.value || node.innerText || '').trim()) : '';
-    };
-    return {
-      departureTrigger: read('button.date-input-17-trigger, button[aria-label*="בחירת תאריך יציאה"], button[aria-label*="Departure date"]'),
-      returnTrigger: read('button.date-input-18-trigger, button[aria-label*="בחירת תאריך חזרה"], button[aria-label*="Return date"]'),
-      inputs: [...document.querySelectorAll('input[placeholder="DD/MM/YYYY"]')].map(node => node.value)
-    };
-  });
-
-  const outboundVerified = state.inputs.includes(expectedOutbound) || state.departureTrigger.includes(expectedOutbound);
-  const returnVerified = state.inputs.includes(expectedReturn) || state.returnTrigger.includes(expectedReturn);
+  const calendarState = await page.evaluate(() => ({
+    headings: [...document.querySelectorAll('h1,h2,h3,[class*="month"],[data-att*="month"]')]
+      .filter(e => e.offsetWidth || e.offsetHeight).map(e => ({
+        tag:e.tagName,id:e.id,text:(e.innerText||'').trim().slice(0,60),att:e.getAttribute('data-att')
+      })).slice(0,30),
+    dayButtons: [...document.querySelectorAll('button')]
+      .filter(e => e.offsetWidth || e.offsetHeight)
+      .map(e => ({text:(e.innerText||'').trim(),att:e.getAttribute('data-att'),aria:e.getAttribute('aria-label'),disabled:e.disabled}))
+      .filter(x => /^\\d{1,2}$/.test(x.text) || (x.att||'').includes('day')).slice(0,100),
+    inputs: [...document.querySelectorAll('input[placeholder="DD/MM/YYYY"]')].map(e=>({value:e.value,readonly:e.readOnly}))
+  }));
   return {
-    ok: outboundVerified && returnVerified,
-    expected: [expectedOutbound, expectedReturn],
-    state
+    ok: false, reason: 'current_calendar_markup_unrecognized_or_dates_not_committed',
+    expected: [expectedOutbound, expectedReturn], state: calendarState
   };
 }
+
 async function diagnostics(page) {
   return page.evaluate(() => ({
     url: location.href, title: document.title,
@@ -420,6 +389,6 @@ async function main() {
   if (process.env.GITHUB_STEP_SUMMARY) {
     await fs.appendFile(process.env.GITHUB_STEP_SUMMARY, markdown + '\n');
   }
-  console.log('Completed ' + results.length + ' searches; visible price candidates: ' + candidates.length);
+  console.log('Completed ' + results.length + ' searches; visible price candidates: ' + candidates.length);\n  if (candidates.length === 0) { console.error('No verified offers; marking workflow as failed instead of reporting success.'); process.exitCode = 2; }
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
