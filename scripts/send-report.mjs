@@ -20,7 +20,7 @@ const offers = results.filter(row =>
   row.status === 'verified_offer' &&
   row.outbound_departure_time &&
   row.return_departure_time &&
-  Number.isFinite(Number(row.total_price)) &&
+  Number.isFinite(Number(row.base_fare_total ?? row.total_price)) &&
   row.currency &&
   /^https:\/\//i.test(row.booking_url || '')
 );
@@ -36,7 +36,9 @@ const formatDate = value => {
 };
 const offerCard = row => {
   const destination = row.destination === 'LCA' ? 'לרנקה' : row.destination === 'PFO' ? 'פאפוס' : escapeHtml(row.destination);
-  const total = new Intl.NumberFormat('he-IL', { maximumFractionDigits: 2 }).format(Number(row.total_price));
+  const total = new Intl.NumberFormat('he-IL', { maximumFractionDigits: 2 }).format(Number(row.base_fare_total ?? row.total_price));
+  const baggage = row.baggage || {};
+  const baggageLine = `כבודה (הערכה נפרדת): ${Number(baggage.checked_bags || 0)} מזוודות · ${Number(baggage.trolleys || 0)} טרולי · ${Number(baggage.estimated_cost || 0)} ${escapeHtml(baggage.currency || 'USD')} לשני הכיוונים`; 
   return `
     <div style="border:1px solid #dce2ea;border-radius:12px;padding:16px;margin:0 0 14px;background:#fff;box-sizing:border-box;width:100%">
       <h3 style="margin:0 0 14px;font-size:18px;line-height:1.35;color:#172033">חיפה ← ${destination}</h3>
@@ -66,7 +68,7 @@ const offerCard = row => {
 
 const settings = [
   report?.passengers ? 'נוסעים: ' + report.passengers : null,
-  report?.baggage_included === true ? 'כבודה כלולה במחיר' : 'כבודה לא אומתה / אינה כלולה בחישוב',
+  report?.baggage ? 'כבודה מחושבת בנפרד (הערכה לפי מחירון)' : 'כבודה לא כלולה במחיר הטיסות',
   report?.coupon_applied ? 'קופון הוחל' : 'ללא קופון'
 ].filter(Boolean).join(' · ');
 
@@ -119,7 +121,7 @@ const textBody = offers.length
       'חיפה → ' + row.destination,
       'המראה: ' + row.outbound + ' ' + row.outbound_departure_time,
       'חזרה: ' + row.return + ' ' + row.return_departure_time,
-      'מחיר כולל: ' + row.total_price + ' ' + row.currency,
+      'מחיר טיסות לפני פרטי נוסעים: ' + (row.base_fare_total ?? row.total_price) + ' ' + row.currency,\n      'כבודה (הערכה נפרדת): ' + (row.baggage?.estimated_cost ?? 'לא חושב') + ' ' + (row.baggage?.currency || ''),
       'הזמנה: ' + row.booking_url
     ].join('\n')).join('\n\n')
   : 'לא נמצאו הצעות מאומתות. חסרים זמני טיסות, מחיר כולל וקישור הזמנה ישיר. מחירי "החל מ-" לא יוצגו כהצעות.';
